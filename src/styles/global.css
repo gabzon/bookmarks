@@ -118,6 +118,22 @@ header.page-head .meta {
   margin-right: 4px;
 }
 
+.tag-block > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-block;
+  margin-top: 6px;
+}
+.tag-block > summary::-webkit-details-marker { display: none; }
+.tag-block > summary.toggle::after {
+  content: '▸';
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+.tag-block[open] > summary.toggle::after { transform: rotate(90deg); }
+
 .chip {
   display: inline-flex;
   align-items: center;
