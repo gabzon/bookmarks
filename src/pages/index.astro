@@ -1,0 +1,168 @@
+---
+import { getCollection } from 'astro:content';
+import { CATEGORIES } from '../lib/categories.ts';
+import '../styles/global.css';
+
+const bookmarks = (await getCollection('bookmarks')).sort(
+  (a, b) => b.data.dateAdded.getTime() - a.data.dateAdded.getTime(),
+);
+
+const tagCounts = new Map<string, number>();
+for (const b of bookmarks) {
+  for (const t of b.data.tags) {
+    tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+  }
+}
+const tags = [...tagCounts.entries()].sort((a, b) => b[1] - a[1]);
+
+const catCounts = new Map<string, number>();
+for (const b of bookmarks) catCounts.set(b.data.category, (catCounts.get(b.data.category) ?? 0) + 1);
+const categories = CATEGORIES.filter((c) => catCounts.has(c)).map((c) => [c, catCounts.get(c)!] as const);
+---
+
+<div class="container">
+  <header class="page-head">
+    <h1>Bookmarks</h1>
+    <div class="meta">{bookmarks.length} saved</div>
+  </header>
+
+  <div class="filter-bar">
+    <input class="search" type="search" placeholder="Search title, summary, use, tags..." autocomplete="off" />
+    <div class="hint">Add a link: <code>pnpm bm &lt;url&gt;</code></div>
+    {bookmarks.length > 0 && (
+    <div class="chip-row" style="margin-top:8px">
+      <span class="label">Category</span>
+      {categories.map(([name, count]) => (
+        <button class="chip" data-cat={name}>
+          {name}<span class="count">{count}</span>
+        </button>
+      ))}
+    </div>
+  )}
+  {tags.length > 0 && (
+    <div class="chip-row" style="margin-top:6px">
+      <span class="label">Tags</span>
+      {tags.map(([name, count]) => (
+        <button class="chip" data-tag={name}>
+          {name}<span class="count">{count}</span>
+        </button>
+      ))}
+      <button class="clear-btn" id="clear-filters">Clear</button>
+    </div>
+  )}
+</div>
+
+{bookmarks.length === 0 ? (
+  <div class="empty">
+    <div class="big">No bookmarks yet</div>
+    <div>Add one with <code>pnpm bm &lt;url&gt;</code></div>
+  </div>
+) : (
+  <div class="cards" id="cards">
+    {bookmarks.map((b) => (
+      <article
+        class="card"
+        data-category={b.data.category}
+        data-tags={b.data.tags.join(',')}
+        data-search={`${b.data.title} ${b.data.summary} ${b.data.use} ${b.data.tags.join(' ')}`.toLowerCase()}
+      >
+        <div class="card-head">
+          <span class="card-title">
+            <a href={b.data.url} target="_blank" rel="noopener" onclick="event.stopPropagation()">{b.data.title}</a>
+          </span>
+          <span class="card-cat">{b.data.category}</span>
+          <span class="card-date">{b.data.dateAdded.toISOString().slice(0, 10)}</span>
+        </div>
+        <p class="card-use">{b.data.use}</p>
+        {b.data.tags.length > 0 && (
+          <div class="card-tags">
+            {b.data.tags.map((t) => <span class="card-tag" data-tag={t}>{t}</span>)}
+          </div>
+        )}
+        <div class="card-detail">
+          <div class="row">
+            <span class="k">What it is</span>
+            <div class="v">{b.data.summary}</div>
+          </div>
+          <div class="row">
+            <span class="k">Why I saved it</span>
+            <div class="v">{b.data.use}</div>
+          </div>
+          <div class="row">
+            <span class="k">URL</span>
+            <div class="v mono">{b.data.url}</div>
+          </div>
+        </div>
+      </article>
+    ))}
+  </div>
+)}
+</div>
+
+<script is:inline>
+  const state = { cat: null, tags: new Set(), q: '' };
+  const cards = document.querySelectorAll('.card');
+  const chips = document.querySelectorAll('.chip');
+  const search = document.querySelector('.search');
+  const clearBtn = document.getElementById('clear-filters');
+
+  function apply() {
+    cards.forEach((card) => {
+      const catOK = !state.cat || card.dataset.category === state.cat;
+      const tagOK = [...state.tags].every((t) => card.dataset.tags.split(',').includes(t));
+      const qOK = !state.q || card.dataset.search.includes(state.q);
+      card.style.display = catOK && tagOK && qOK ? '' : 'none';
+      if (!(catOK && tagOK && qOK)) card.classList.remove('expanded');
+    });
+  }
+
+  chips.forEach((chip) => {
+    chip.addEventListener('click', () => {
+      if (chip.dataset.cat) {
+        state.cat = state.cat === chip.dataset.cat ? null : chip.dataset.cat;
+        document.querySelectorAll('.chip[data-cat]').forEach((c) => c.classList.remove('active'));
+        if (state.cat) chip.classList.add('active');
+      } else if (chip.dataset.tag) {
+        if (state.tags.has(chip.dataset.tag)) {
+          state.tags.delete(chip.dataset.tag);
+          chip.classList.remove('active');
+        } else {
+          state.tags.add(chip.dataset.tag);
+          chip.classList.add('active');
+        }
+      }
+      apply();
+    });
+  });
+
+  document.querySelectorAll('.card-tag').forEach((tag) => {
+    tag.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const t = tag.dataset.tag;
+      const chip = document.querySelector(`.chip[data-tag="${t}"]`);
+      if (chip) chip.click();
+    });
+  });
+
+  cards.forEach((card) => {
+    card.addEventListener('click', () => card.classList.toggle('expanded'));
+  });
+
+  if (search) {
+    search.addEventListener('input', () => {
+      state.q = search.value.toLowerCase().trim();
+      apply();
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      state.cat = null;
+      state.tags.clear();
+      state.q = '';
+      if (search) search.value = '';
+      chips.forEach((c) => c.classList.remove('active'));
+      apply();
+    });
+  }
+</script>
