@@ -6,7 +6,7 @@ the z.ai GLM API to research/classify a URL and writes a markdown file.
 
 ## Commands
 
-- `pnpm bm <url>` — research + save a bookmark (the primary write path)
+- `pnpm bm <url...>` — research + save one or more bookmarks (primary write path)
   - `--force` / `-f` — re-research and overwrite when the URL is already saved
   - `--dry-run` / `-n` — print the frontmatter that would be written, no save
   - `--help` / `-h` — usage

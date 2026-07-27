@@ -28,7 +28,7 @@ interface Flags {
   help: boolean;
 }
 
-function parseArgs(argv: string[]): { url: string | null; flags: Flags } {
+function parseArgs(argv: string[]): { urls: string[]; flags: Flags } {
   const flags: Flags = { force: false, dryRun: false, help: false };
   const positional: string[] = [];
   for (const a of argv.slice(2)) {
@@ -37,10 +37,12 @@ function parseArgs(argv: string[]): { url: string | null; flags: Flags } {
     else if (a === '-h' || a === '--help') flags.help = true;
     else positional.push(a);
   }
-  return { url: positional[0] ?? null, flags };
+  return { urls: positional, flags };
 }
 
-const HELP = `Usage: pnpm bm <url> [options]
+const HELP = `Usage: pnpm bm <url...> [options]
+
+Save one or more bookmarks. Each URL is researched, classified, and written.
 
 Options:
   -f, --force      Re-research and overwrite if URL already saved
@@ -107,18 +109,16 @@ function toFrontmatter(b: {
 
 async function main() {
   await loadEnv();
-  const { url, flags } = parseArgs(process.argv);
+  const { urls, flags } = parseArgs(process.argv);
 
-  if (flags.help || !url) {
+  if (flags.help || urls.length === 0) {
     console.log(HELP);
     process.exit(flags.help ? 0 : 1);
   }
 
-  let normalized: string;
-  try {
-    normalized = new URL(url).toString();
-  } catch {
-    console.error(`Not a valid URL: ${url}`);
+  const apiKey = process.env.ZAI_API_KEY;
+  if (!apiKey) {
+    console.error(`ZAI_API_KEY is not set. Copy .env.example to .env and fill it in.`);
     process.exit(1);
   }
 
@@ -128,66 +128,79 @@ async function main() {
     '../src/lib/bookmark.ts'
   );
 
-  const hash = urlHash(normalized);
-  const existing = await findExisting(hash);
-  if (existing && !flags.force) {
-    console.error(
-      `Already saved as "${existing.title}" on ${existing.date} (${existing.file}).`,
-    );
-    console.error(`Use --force to re-research.`);
-    process.exit(1);
+  let failures = 0;
+  for (let i = 0; i < urls.length; i++) {
+    if (i > 0) console.log();
+    const ok = await processUrl(urls[i]);
+    if (!ok) failures++;
   }
+  if (failures > 0) process.exit(1);
 
-  const apiKey = process.env.ZAI_API_KEY;
-  if (!apiKey) {
-    console.error(`ZAI_API_KEY is not set. Copy .env.example to .env and fill it in.`);
-    process.exit(1);
+  async function processUrl(rawUrl: string): Promise<boolean> {
+    let normalized: string;
+    try {
+      normalized = new URL(rawUrl).toString();
+    } catch {
+      console.error(`Not a valid URL: ${rawUrl}`);
+      return false;
+    }
+
+    const hash = urlHash(normalized);
+    const existing = await findExisting(hash);
+    if (existing && !flags.force) {
+      console.error(
+        `Already saved as "${existing.title}" on ${existing.date} (${existing.file}).`,
+      );
+      console.error(`Use --force to re-research.`);
+      return false;
+    }
+
+    console.log(`Researching ${normalized} ...`);
+    let result;
+    try {
+      result = await researchUrl(normalized, apiKey);
+    } catch (err) {
+      console.error(`GLM research failed: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+
+    let bookmark;
+    try {
+      bookmark = validateAIResponse(result.raw);
+    } catch (err) {
+      console.error(
+        `AI returned invalid data: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      console.error(`Raw response:\n${result.rawContent.slice(0, 800)}`);
+      return false;
+    }
+
+    const dateAdded = dateStamp();
+    const filename = filenameFor(bookmark, dateAdded);
+    const filepath = path.join(BOOKMARKS_DIR, filename);
+    const fileBody = toFrontmatter({
+      url: normalized,
+      title: bookmark.title,
+      summary: bookmark.summary,
+      use: bookmark.use,
+      category: bookmark.category,
+      tags: bookmark.tags,
+      dateAdded,
+      urlHash: hash,
+    });
+
+    if (flags.dryRun) {
+      console.log(`\n--- DRY RUN: ${filename} ---`);
+      console.log(fileBody);
+      return true;
+    }
+
+    await mkdir(BOOKMARKS_DIR, { recursive: true });
+    await writeFile(filepath, fileBody, 'utf8');
+    console.log(`Saved: ${filename}`);
+    console.log(`  ${bookmark.title} [${bookmark.category}] (${bookmark.tags.join(', ')})`);
+    return true;
   }
-
-  console.log(`Researching ${normalized} ...`);
-  let result;
-  try {
-    result = await researchUrl(normalized, apiKey);
-  } catch (err) {
-    console.error(`GLM research failed: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
-
-  let bookmark;
-  try {
-    bookmark = validateAIResponse(result.raw);
-  } catch (err) {
-    console.error(
-      `AI returned invalid data: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    console.error(`Raw response:\n${result.rawContent.slice(0, 800)}`);
-    process.exit(1);
-  }
-
-  const dateAdded = dateStamp();
-  const filename = filenameFor(bookmark, dateAdded);
-  const filepath = path.join(BOOKMARKS_DIR, filename);
-  const fileBody = toFrontmatter({
-    url: normalized,
-    title: bookmark.title,
-    summary: bookmark.summary,
-    use: bookmark.use,
-    category: bookmark.category,
-    tags: bookmark.tags,
-    dateAdded,
-    urlHash: hash,
-  });
-
-  if (flags.dryRun) {
-    console.log(`\n--- DRY RUN: ${filename} ---`);
-    console.log(fileBody);
-    process.exit(0);
-  }
-
-  await mkdir(BOOKMARKS_DIR, { recursive: true });
-  await writeFile(filepath, fileBody, 'utf8');
-  console.log(`Saved: ${filename}`);
-  console.log(`  ${bookmark.title} [${bookmark.category}] (${bookmark.tags.join(', ')})`);
 }
 
 main().catch((err) => {
